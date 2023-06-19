@@ -1,1 +1,4 @@
 outputs
+log_driver
+cat
+draft*
