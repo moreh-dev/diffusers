@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Check input variables
 # ==================================
 train_script=train.sh
@@ -87,6 +89,7 @@ if [[ "$run_all_tasks" == "True" ]]; then # Task is not provided, run all tasks
             execute_training $model $batch_size
             if [[ -x $(command -v mlflow) ]]; then
                 pkill -9 mlflow
+                pkill -f gunicorn
             fi
         done < $model_batchsize_file
         execute_deleting_env $task
@@ -103,6 +106,7 @@ elif [[ "$run_all_model" == "True" ]]; then # Task is provided, model is not pro
         execute_training $model $batch_size
         if [[ -x $(command -v mlflow) ]]; then
             pkill -9 mlflow
+            pkill -f gunicorn
         fi
     done < $model_batchsize_file
     execute_deleting_env $task
@@ -116,6 +120,7 @@ else # Task and model are provided, run specific model in task
     execute_training $model $batch_size
     if [[ -x $(command -v mlflow) ]]; then
         pkill -9 mlflow
+        pkill -f gunicorn
     fi
     execute_deleting_env $task
 fi
