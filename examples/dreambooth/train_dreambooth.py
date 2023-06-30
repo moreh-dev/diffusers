@@ -56,6 +56,14 @@ from diffusers.utils.import_utils import is_xformers_available
 if is_wandb_available():
     import wandb
 
+try:
+    import mlflow
+    if not os.environ.get("MLFLOW_TRACKING_URI", None):
+        mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    has_mlflow = True
+except ImportError:
+    has_mlflow = False
+
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.17.0.dev0")
 
@@ -1104,6 +1112,11 @@ def main(args):
     global_step = 0
     first_epoch = 0
 
+    # setup mlflow tracking
+    if has_mlflow:
+        experiment_id = mlflow.create_experiment('{}'.format(args.pretrained_model_name_or_path))
+        experiment = mlflow.get_experiment(experiment_id)
+
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
@@ -1133,18 +1146,24 @@ def main(args):
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
 
+    if has_mlflow:
+        mlflow.start_run(run_name=args.pretrained_model_name_or_path, experiment_id=experiment.experiment_id)
+
     loss_dict = {}
     start_time = time.time()
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
         if args.train_text_encoder:
             text_encoder.train()
+        log_interval_time = time.time()
+        num_samples = 0
         for step, batch in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
+                log_interval_time = time.time()
 
             with accelerator.accumulate(unet):
                 pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
@@ -1226,6 +1245,15 @@ def main(args):
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+                num_samples += bsz
+                if step % args.log_interval == 0 & has_mlflow:
+                    time_elapsed = time.time() - log_interval_time
+                    throughput = num_samples / time_elapsed
+                    loss_step = loss.item()
+                    mlflow.log_metric('loss', loss_step)
+                    mlflow.log_metric('throughput', throughput)
+                    log_interval_time = time.time()
+                    num_samples = 0
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -1312,7 +1340,8 @@ def main(args):
     throughput = (len(train_dataset)*args.num_train_epochs) / elapsed_time
     output_dict = {"throughput": throughput,
                    "loss": loss_dict}
-    
+    if has_mlflow:
+        mlflow.end_run()    
     import json
     with open(args.log_dir, "w") as f:
         json.dump(output_dict, f)

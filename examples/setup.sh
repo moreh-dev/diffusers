@@ -24,6 +24,8 @@ if [ "$CONDA_DEFAULT_ENV" = "${env_name}" ] && [ "$install_requirements" == "1" 
     pip install -e .
     cd ${current_dir}/${task}
     pip install -r requirements.txt
+    pip install mlflow
+    export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
     moreh-switch-model -M 2
-    echo -e "\\n" | update-moreh --torch 1.10.0 --target 23.6.0 --force
+    echo -e "\\n" | update-moreh --torch 1.13.1 --target 23.6.0 --force
 fi

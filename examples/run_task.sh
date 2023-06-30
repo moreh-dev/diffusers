@@ -80,7 +80,14 @@ if [[ "$run_all_tasks" == "True" ]]; then # Task is not provided, run all tasks
         bash setup.sh $task
         cd $task
         while read model batch_size ; do
+            if [[ -x $(command -v mlflow) ]]; then
+                mlflow server &
+                sleep 5
+            fi
             execute_training $model $batch_size
+            if [[ -x $(command -v mlflow) ]]; then
+                pkill -9 mlflow
+            fi
         done < $model_batchsize_file
         execute_deleting_env $task
         cd ..
@@ -89,13 +96,27 @@ elif [[ "$run_all_model" == "True" ]]; then # Task is provided, model is not pro
     echo "Running all models in task $task"
     cd $task
     while read model batch_size ; do
+        if [[ -x $(command -v mlflow) ]]; then
+            mlflow server &
+            sleep 5
+        fi
         execute_training $model $batch_size
+        if [[ -x $(command -v mlflow) ]]; then
+            pkill -9 mlflow
+        fi
     done < $model_batchsize_file
     execute_deleting_env $task
 else # Task and model are provided, run specific model in task
     echo Training the model $model in task $task
     cd $task
+    if [[ -x $(command -v mlflow) ]]; then
+        mlflow server &
+        sleep 5
+    fi
     execute_training $model $batch_size
+    if [[ -x $(command -v mlflow) ]]; then
+        pkill -9 mlflow
+    fi
     execute_deleting_env $task
 fi
 
