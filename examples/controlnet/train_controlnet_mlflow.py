@@ -265,7 +265,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="controlnet-model",
+        default="outputs",
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
@@ -553,7 +553,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--logging_steps",
         type=int,
-        default=10,
+        default=100,
         help="Log every X updates steps. Default to 10.",
     )
     parser.add_argument(
@@ -1029,7 +1029,7 @@ def main(args):
     with mlflow_runner:
         start_time = time.time()
         for epoch in range(first_epoch, args.num_train_epochs):
-            start_time_epoch = time.time()
+            interval_start_time = time.time()
             for step, batch in enumerate(train_dataloader):
                 with accelerator.accumulate(controlnet):
                     # Convert images to latent space
@@ -1113,29 +1113,28 @@ def main(args):
                             )
 
                 if (step+1) % args.logging_steps == 0:
-                    logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}                    
-                    mlflow.log_metric('loss', loss.detach().item(), step=global_step)
+                    logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+
+                    interval_elapsed_time = time.time() - interval_start_time
+                    interval_start_time = time.time()
+                    interval_throughput = (args.logging_steps*args.train_batch_size) / interval_elapsed_time                  
+                    mlflow.log_metric('interval_loss', loss.detach().item(), step=global_step)
+                    mlflow.log_metric('interval_throughput', interval_throughput, step=global_step)
+                    mlflow.log_metric('interval_elapsed_time', interval_elapsed_time, step=global_step)
+
                     progress_bar.set_postfix(**logs)
                     accelerator.log(logs, step=global_step)
                     
 
                 if global_step >= args.max_train_steps:
                     break
-
-            elapsed_time = time.time() - start_time_epoch
-            epoch_throughput = (len(train_dataset)) / elapsed_time
-
-            output_dict = {"epoch": epoch+1, "loss": loss.detach().item(), "throughput": epoch_throughput}
-            output_list.append(output_dict)
-            mlflow.log_metric('epoch_throughput', epoch_throughput, step=epoch+1)
-            mlflow.log_metric('epoch_elapsed_time', elapsed_time, step=epoch+1)
-            
         
         elapsed_time = time.time() - start_time
-        throughput = (len(train_dataset)*args.num_train_epochs) / elapsed_time
-        output_dict = {"epoch": "summary", "loss": loss.detach().item(), "throughput": throughput}
+        throughput = (args.max_train_steps * args.train_batch_size) / elapsed_time
+        output_dict = {"loss": loss.detach().item(), "throughput": throughput}
         output_list.append(output_dict)
         mlflow.log_metric('avg_throughput', throughput)
+        mlflow.log_metric('total_elapsed_time', elapsed_time)
         mlflow.log_params({'model': args.controlnet_model_name_or_path ,'batch_size': args.train_batch_size})
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()

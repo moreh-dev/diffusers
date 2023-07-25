@@ -38,8 +38,6 @@ conda run -n ${env_name} python3 train_controlnet_mlflow.py \
     --output_dir ${output_dir} \
     --log_dir "${log_dir}" \
     --learning_rate=1e-5 \
-    --max_train_steps 10 \
-    --validation_image "./conditioning_image_1.png" "./conditioning_image_2.png" \
-    --validation_prompt "red circle with blue background" "cyan circle with brown floral background" \
+    --max_train_steps 200 \
     --train_batch_size ${batch_size} \
-    --logging_steps=100 \
+    --logging_steps=50 \

@@ -3,8 +3,6 @@ pid=$1
 task=$2
 model=$3
 batch_size=$4
-log_dir="logs_${model}"
-mkdir -p $log_dir
 # Initialize a variable to track peak memory usage
 peak_memory=0
 # Monitor GPU memory usage using moreh-smi in a loop

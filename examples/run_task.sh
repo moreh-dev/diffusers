@@ -59,7 +59,7 @@ execute_training() {
             bash $train_script -t $task -m $model -o $output_dir -l $log_dir -b $batch_size >> "../log_terminal/${task}/${model_name}.log" 2>&1 &
             pid=$!
             bash ../all_scripts/memory_record_moreh.sh $pid $task $model $batch_size
-            echo Done training model $model for task $task
+            echo End of training model $model for task $task
 }
 
 # Function to delete env
@@ -73,10 +73,10 @@ execute_deleting_env() {
 }
 
 # Start mlflow server
-if [[ -x $(command -v mlflow) ]] && [[ -z $(pgrep mlflow) ]]; then
-    mlflow server &
-    sleep 5
-fi
+# if [[ -x $(command -v mlflow) ]] && [[ -z $(pgrep mlflow) ]]; then
+#     mlflow server &
+#     sleep 5
+# fi
 
 
 # Check condition to run all tasks, all models in task, or specific model in task
@@ -106,5 +106,3 @@ else # Task and model are provided, run specific model in task
     execute_training $model $batch_size
     # execute_deleting_env $task
 fi
-
-echo Done
