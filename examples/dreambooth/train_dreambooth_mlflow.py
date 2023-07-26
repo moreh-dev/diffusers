@@ -757,7 +757,7 @@ def main(args):
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
-        logging_dir=logging_dir,
+        project_dir=logging_dir,
         project_config=accelerator_project_config,
     )
 
@@ -1145,14 +1145,20 @@ def main(args):
     
     #Initialize mlflow
     # mlflow.set_tracking_uri("http://127.0.0.1:5000")
+
     current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    experiment_id = mlflow.create_experiment('{}_{}'.format(args.pretrained_model_name_or_path, current_datetime))
-    experiment = mlflow.get_experiment(experiment_id)
-    mlflow_runner = mlflow.start_run(run_name=args.pretrained_model_name_or_path, experiment_id=experiment.experiment_id)
+    experiment_name = args.pretrained_model_name_or_path
+
+    if not mlflow.get_experiment_by_name(experiment_name):        
+        experiment_id = mlflow.create_experiment(experiment_name)
+
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    mlflow_runner = mlflow.start_run(run_name=f'bs{args.train_batch_size}_{current_datetime}', experiment_id=experiment.experiment_id)
+
     with mlflow_runner:
         start_time = time.time()
         for epoch in range(first_epoch, args.num_train_epochs):
-            start_time_epoch = time.time()
+            interval_start_time = time.time()
             unet.train()
             if args.train_text_encoder:
                 text_encoder.train()
@@ -1271,26 +1277,29 @@ def main(args):
                             )
 
                 if (step+1) % args.logging_steps == 0:
-                    logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}                    
-                    mlflow.log_metric('loss', loss.detach().item(), step=global_step)
+                    logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+                    
+                    interval_elapsed_time = time.time() - interval_start_time
+                    interval_start_time = time.time()
+                    interval_throughput = (args.logging_steps*args.train_batch_size) / interval_elapsed_time                  
+                                        
+                    mlflow.log_metric('interval_loss', loss.detach().item(), step=global_step)
+                    mlflow.log_metric('interval_throughput', interval_throughput, step=global_step)
+                    mlflow.log_metric('interval_elapsed_time', interval_elapsed_time, step=global_step)
+
                     progress_bar.set_postfix(**logs)
                     accelerator.log(logs, step=global_step)
 
                 if global_step >= args.max_train_steps:
+                    elapsed_time = time.time() - start_time
+                    throughput = (args.max_train_steps * args.train_batch_size) / elapsed_time
+
+                    mlflow.log_metric('avg_throughput', throughput)
+                    mlflow.log_metric('total_elapsed_time', elapsed_time)
+                    mlflow.log_params({'model': args.pretrained_model_name_or_path ,'batch_size': args.train_batch_size})
+
                     break
             
-            elapsed_time = time.time() - start_time_epoch
-            epoch_throughput = (len(train_dataset)) / elapsed_time
-            output_dict = {"epoch": epoch+1, "loss": loss.detach().item(), "throughput": epoch_throughput}
-            output_list.append(output_dict)
-            mlflow.log_metric('epoch_throughput', epoch_throughput, step=epoch+1)
-            
-        elapsed_time = time.time() - start_time
-        throughput = (len(train_dataset)*args.num_train_epochs) / elapsed_time
-        output_dict = {"epoch": "summary", "loss": loss.detach().item(), "throughput": throughput}
-        output_list.append(output_dict)
-        mlflow.log_metric('avg_throughput', throughput)
-        mlflow.log_params({'model': args.pretrained_model_name_or_path ,'batch_size': args.train_batch_size})
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
@@ -1339,11 +1348,6 @@ def main(args):
                 commit_message="End of training",
                 ignore_patterns=["step_*", "epoch_*"],
             )
-    
-    import json
-    with open(args.log_dir, "w") as f:
-        json.dump(output_list, f, indent=4)
-    logger.info(f"Output logs saved in {args.log_dir}")
 
     accelerator.end_training()
 
