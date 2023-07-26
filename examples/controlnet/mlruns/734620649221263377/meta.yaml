@@ -1,0 +1,6 @@
+artifact_location: file:///nas/thuchk/repos/diffusers/examples/controlnet/mlruns/734620649221263377
+creation_time: 1690381177244
+experiment_id: '734620649221263377'
+last_update_time: 1690381177244
+lifecycle_stage: active
+name: lllyasviel/sd-controlnet-openpose

@@ -1,0 +1,15 @@
+artifact_uri: file:///nas/thuchk/repos/diffusers/examples/controlnet/mlruns/734620649221263377/b2da3507d6be48a2ba67625b6703b717/artifacts
+end_time: 1690381906662
+entry_point_name: ''
+experiment_id: '734620649221263377'
+lifecycle_stage: active
+run_id: b2da3507d6be48a2ba67625b6703b717
+run_name: bs8_2023-07-26_23:19:37
+run_uuid: b2da3507d6be48a2ba67625b6703b717
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1690381177896
+status: 3
+tags: []
+user_id: ubuntu

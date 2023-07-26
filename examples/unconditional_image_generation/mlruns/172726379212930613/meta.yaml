@@ -1,0 +1,6 @@
+artifact_location: file:///nas/thuchk/repos/diffusers/examples/unconditional_image_generation/mlruns/172726379212930613
+creation_time: 1690386292332
+experiment_id: '172726379212930613'
+last_update_time: 1690386292332
+lifecycle_stage: active
+name: ddpm-unet

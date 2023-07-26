@@ -1,0 +1,6 @@
+artifact_location: file:///nas/thuchk/repos/diffusers/examples/dreambooth/mlruns/715999167852523928
+creation_time: 1690381942907
+experiment_id: '715999167852523928'
+last_update_time: 1690381942907
+lifecycle_stage: active
+name: runwayml/stable-diffusion-v1-5

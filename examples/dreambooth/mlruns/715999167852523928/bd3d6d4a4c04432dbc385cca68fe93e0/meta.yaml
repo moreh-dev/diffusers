@@ -1,0 +1,15 @@
+artifact_uri: file:///nas/thuchk/repos/diffusers/examples/dreambooth/mlruns/715999167852523928/bd3d6d4a4c04432dbc385cca68fe93e0/artifacts
+end_time: 1690381977044
+entry_point_name: ''
+experiment_id: '715999167852523928'
+lifecycle_stage: active
+run_id: bd3d6d4a4c04432dbc385cca68fe93e0
+run_name: bs8_2023-07-26_23:32:22
+run_uuid: bd3d6d4a4c04432dbc385cca68fe93e0
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1690381943516
+status: 3
+tags: []
+user_id: ubuntu

@@ -1,0 +1,6 @@
+artifact_location: file:///nas/thuchk/repos/diffusers/examples/instruct_pix2pix/mlruns/538187612795869959
+creation_time: 1690380018050
+experiment_id: '538187612795869959'
+last_update_time: 1690380018050
+lifecycle_stage: active
+name: CompVis/stable-diffusion-v1-4

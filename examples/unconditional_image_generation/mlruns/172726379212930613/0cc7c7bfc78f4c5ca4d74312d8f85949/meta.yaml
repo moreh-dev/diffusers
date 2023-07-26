@@ -1,0 +1,15 @@
+artifact_uri: file:///nas/thuchk/repos/diffusers/examples/unconditional_image_generation/mlruns/172726379212930613/0cc7c7bfc78f4c5ca4d74312d8f85949/artifacts
+end_time: 1690386584305
+entry_point_name: ''
+experiment_id: '172726379212930613'
+lifecycle_stage: active
+run_id: 0cc7c7bfc78f4c5ca4d74312d8f85949
+run_name: bs250_2023-07-27_00:47:50
+run_uuid: 0cc7c7bfc78f4c5ca4d74312d8f85949
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1690386470651
+status: 3
+tags: []
+user_id: ubuntu

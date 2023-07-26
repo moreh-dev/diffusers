@@ -1,0 +1,15 @@
+artifact_uri: file:///nas/thuchk/repos/diffusers/examples/text_to_image/mlruns/516937441801954029/e02a260d62ab4917a5605727f2908380/artifacts
+end_time: 1690382330337
+entry_point_name: ''
+experiment_id: '516937441801954029'
+lifecycle_stage: active
+run_id: e02a260d62ab4917a5605727f2908380
+run_name: bs6_2023-07-26_23:34:02
+run_uuid: e02a260d62ab4917a5605727f2908380
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1690382043729
+status: 3
+tags: []
+user_id: ubuntu
