@@ -78,7 +78,7 @@ if [[ "$run_all_tasks" == "True" ]]; then # Task is not provided, run all tasks
     echo "Running all tasks.."
     for task in dreambooth instruct_pix2pix controlnet text_to_image unconditional_image_generation textual_inversion; do
         echo "Running task $task"
-        bash setup_hac $task
+        bash setup_hac.sh $task
         cd $task
         while read model batch_size ; do
             execute_training $model $batch_size

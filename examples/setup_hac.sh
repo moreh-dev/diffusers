@@ -15,12 +15,12 @@ else
     conda clean --all --force-pkgs-dir -y
     conda create --name ${env_name} python=3.8 -y
     install_requirements=1
-    
 fi
 
+source ${base_env}/etc/profile.d/conda.sh
+conda activate ${env_name}
+
 if [ "$CONDA_DEFAULT_ENV" = "${env_name}" ] && [ "$install_requirements" == "1" ]; then
-    source ${base_env}/etc/profile.d/conda.sh
-    conda activate ${env_name}
     echo "installing requirements in conda env ${env_name}.."
     cd ..
     pip install -e .
