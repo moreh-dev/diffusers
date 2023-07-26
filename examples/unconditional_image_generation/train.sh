@@ -38,10 +38,10 @@ conda run -n ${env_name} python3 train_unconditional_mlflow.py \
   --output_dir ${output_dir} \
   --log_dir "${log_dir}" \
   --train_batch_size=${batch_size} \
-  --num_epochs=1 \
+  --num_epochs=3 \
   --gradient_accumulation_steps=2 \
   --use_ema \
   --learning_rate=1e-4 \
   --lr_warmup_steps=500 \
   --mixed_precision=no \
-  --logging_steps=100 \
+  --logging_steps=10 \
