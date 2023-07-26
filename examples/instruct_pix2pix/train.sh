@@ -38,7 +38,7 @@ conda run -n ${env_name} python3 train_instruct_pix2pix_mlflow.py \
     --dataset_name=$DATASET_ID \
     --resolution=256 --random_flip \
     --train_batch_size $batch_size --gradient_accumulation_steps=4 \
-    --max_train_steps=1 \
+    --max_train_steps=200 \
     --num_train_epochs 1 \
     --learning_rate=5e-05 --max_grad_norm=1 --lr_warmup_steps=0 \
     --seed=42 \
