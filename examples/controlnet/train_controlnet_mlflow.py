@@ -1127,15 +1127,15 @@ def main(args):
                     
 
                 if global_step >= args.max_train_steps:
+                    elapsed_time = time.time() - start_time
+                    throughput = (args.max_train_steps * args.train_batch_size) / elapsed_time
+                    output_dict = {"loss": loss.detach().item(), "throughput": throughput}
+                    output_list.append(output_dict)
+                    mlflow.log_metric('avg_throughput', throughput)
+                    mlflow.log_metric('total_elapsed_time', elapsed_time)
+                    mlflow.log_params({'model': args.controlnet_model_name_or_path ,'batch_size': args.train_batch_size})
                     break
         
-        elapsed_time = time.time() - start_time
-        throughput = (args.max_train_steps * args.train_batch_size) / elapsed_time
-        output_dict = {"loss": loss.detach().item(), "throughput": throughput}
-        output_list.append(output_dict)
-        mlflow.log_metric('avg_throughput', throughput)
-        mlflow.log_metric('total_elapsed_time', elapsed_time)
-        mlflow.log_params({'model': args.controlnet_model_name_or_path ,'batch_size': args.train_batch_size})
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
