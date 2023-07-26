@@ -15,7 +15,7 @@ done
 
 # If task is specified, setup env for task. Otherwise, set run_all_tasks=True, env for each task will be setup later
 if [[ "$@" == *"-t"* ]]; then 
-  bash setup.sh $task
+  bash setup_hac.sh $task
 else
   echo -e "*** Note: -t (task name) not specified, will run all tasks. \
           \n To run single task, declare <-t task_name> \
@@ -78,7 +78,7 @@ if [[ "$run_all_tasks" == "True" ]]; then # Task is not provided, run all tasks
     echo "Running all tasks.."
     for task in dreambooth instruct_pix2pix controlnet text_to_image unconditional_image_generation textual_inversion; do
         echo "Running task $task"
-        bash setup.sh $task
+        bash setup_hac $task
         cd $task
         while read model batch_size ; do
             execute_training $model $batch_size
@@ -98,6 +98,8 @@ else # Task and model are provided, run specific model in task
     cd $task
     execute_training $model $batch_size
     # execute_deleting_env $task
+    cd ..
+    rm -R ../outputs/$task
 fi
 
 echo Done

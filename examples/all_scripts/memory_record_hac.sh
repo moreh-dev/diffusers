@@ -22,4 +22,4 @@ while true; do
     sleep 1
 done    
 # Log the peak memory usage
-echo Task: $task, Model: $model, Batch size: $batch_size, Peak memory: $peak_memory >> "../log_terminal/${task}_memory.log"
+echo Task: $task, Model: $model, Batch size: $batch_size, Peak memory: $peak_memory / Total memory '40536' >> "../log_terminal/${task}_memory.log"
