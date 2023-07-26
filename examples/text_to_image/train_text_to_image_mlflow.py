@@ -940,16 +940,16 @@ def main():
                                         
                     mlflow.log_metric('interval_loss', loss.detach().item(), step=global_step)
                     mlflow.log_metric('interval_throughput', interval_throughput, step=global_step)
-                    mlflow.log_metric('interval_elapsed_time', interval_elapsed_time, step=global_step)
 
                     progress_bar.set_postfix(**logs)
 
                 if global_step >= args.max_train_steps:
-                    elapsed_time = time.time() - start_time
-                    throughput = (args.max_train_steps * args.train_batch_size) / elapsed_time
+                    elapsed_time = (time.time() - start_time) 
+                    one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
+                    throughput = (args.max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
 
                     mlflow.log_metric('avg_throughput', throughput)
-                    mlflow.log_metric('total_elapsed_time', elapsed_time)
+                    mlflow.log_metric('one_epoch_time', one_epoch_time)
                     mlflow.log_params({'model': args.pretrained_model_name_or_path ,'batch_size': args.train_batch_size})
 
                     break

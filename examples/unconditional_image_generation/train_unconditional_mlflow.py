@@ -652,7 +652,6 @@ def main(args):
                                         
                     mlflow.log_metric('interval_loss', loss.detach().item(), step=global_step)
                     mlflow.log_metric('interval_throughput', interval_throughput, step=global_step)
-                    mlflow.log_metric('interval_elapsed_time', interval_elapsed_time, step=global_step)
 
                     if args.use_ema:
                         logs["ema_decay"] = ema_model.cur_decay_value
@@ -660,11 +659,12 @@ def main(args):
                     accelerator.log(logs, step=global_step)
 
                 if global_step >= max_train_steps:
-                    elapsed_time = time.time() - start_time
-                    throughput = (max_train_steps * args.train_batch_size) / elapsed_time
+                    elapsed_time = (time.time() - start_time) 
+                    one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
+                    throughput = elapsed_time / args.num_epochs
 
                     mlflow.log_metric('avg_throughput', throughput)
-                    mlflow.log_metric('total_elapsed_time', elapsed_time)
+                    mlflow.log_metric('one_epoch_time', one_epoch_time)
                     mlflow.log_params({'model': args.model_config_name_or_path ,'batch_size': args.train_batch_size})
                     break
 
