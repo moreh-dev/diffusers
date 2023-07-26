@@ -659,9 +659,9 @@ def main(args):
                     accelerator.log(logs, step=global_step)
 
                 if global_step >= max_train_steps:
-                    elapsed_time = (time.time() - start_time) 
-                    one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
-                    throughput = elapsed_time / args.num_epochs
+                    elapsed_time = time.time() - start_time
+                    one_epoch_time = elapsed_time/ args.num_epochs
+                    throughput = (max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
 
                     mlflow.log_metric('avg_throughput', throughput)
                     mlflow.log_metric('one_epoch_time', one_epoch_time)
