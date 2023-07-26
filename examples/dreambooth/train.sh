@@ -50,7 +50,7 @@ conda run -n ${env_name} python3 train_dreambooth_mlflow.py \
   --learning_rate=5e-6 \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
-  --max_train_steps=10 \
+  --num_train_epochs=3 \
   --output_dir ${output_dir}  \
   --log_dir "${log_dir}" \
-  --logging_steps=10 \
+  --logging_steps=3 \
