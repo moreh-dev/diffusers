@@ -28,7 +28,9 @@ from .modeling_utils import ModelMixin
 from .unet_2d_blocks import (
     CrossAttnDownBlock2D,
     CrossAttnUpBlock2D,
+    EfficientCrossAttnDownBlock2D,
     DownBlock2D,
+    EfficientDownBlock2D,
     UNetMidBlock2DCrossAttn,
     UNetMidBlock2DSimpleCrossAttn,
     UpBlock2D,
@@ -51,7 +53,7 @@ class UNet2DConditionOutput(BaseOutput):
     sample: torch.FloatTensor
 
 
-class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin):
+class EfficientUNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin):
     r"""
     UNet2DConditionModel is a conditional 2D UNet model that takes in a noisy sample, conditional state, and a timestep
     and returns sample shaped output.
@@ -349,7 +351,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 in_channels=input_channel,
                 out_channels=output_channel,
                 temb_channels=blocks_time_embed_dim,
-                add_downsample=not is_final_block,
+                add_downsample=True,
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
@@ -424,11 +426,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
 
             # add upsample block for all BUT final layer
-            if not is_final_block:
-                add_upsample = True
-                self.num_upsamplers += 1
-            else:
-                add_upsample = False
+            self.num_upsamplers += 1
 
             up_block = get_up_block(
                 up_block_type,
@@ -437,7 +435,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 out_channels=output_channel,
                 prev_output_channel=prev_output_channel,
                 temb_channels=blocks_time_embed_dim,
-                add_upsample=add_upsample,
+                add_upsample=True,
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,

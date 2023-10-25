@@ -215,6 +215,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         self,
         hidden_states,
         encoder_hidden_states=None,
+        encoder_attention_mask=None,
         timestep=None,
         class_labels=None,
         cross_attention_kwargs=None,
@@ -265,6 +266,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
             hidden_states = block(
                 hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
                 timestep=timestep,
                 cross_attention_kwargs=cross_attention_kwargs,
                 class_labels=class_labels,
