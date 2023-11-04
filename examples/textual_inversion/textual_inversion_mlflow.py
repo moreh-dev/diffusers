@@ -953,7 +953,7 @@ def main():
                             text_encoder, tokenizer, unet, vae, args, accelerator, weight_dtype, epoch
                         )
 
-            if (step) % args.logging_steps == 0:
+            if (global_step) % args.logging_steps == 0:
                 logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 
                 interval_elapsed_time = time.time() - interval_start_time
@@ -967,6 +967,9 @@ def main():
 
                 progress_bar.set_postfix(**logs)
                 accelerator.log(logs, step=global_step)
+                save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                accelerator.save_state(save_path)
+                logger.info(f"Saved state to {save_path}")
 
             if len(throughput_list) == 5:
                 avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)

@@ -968,7 +968,7 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            if (step) % args.logging_steps == 0:
+            if (global_step) % args.logging_steps == 0:
                 logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 interval_elapsed_time = time.time() - interval_start_time
                 interval_start_time = time.time()
@@ -995,6 +995,11 @@ def main():
                 epoch_time = len(train_dataset) / avg_throughput
                 mlflow.log_metric('avg_throughput', avg_throughput)
                 mlflow.log_metric('epoch_time', epoch_time)
+
+                if accelerator.is_main_process:
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                        accelerator.save_state(save_path)
+                        logger.info(f"Saved state to {save_path}")
                 # elapsed_time = (time.time() - start_time) 
                 # one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
                 # throughput = (args.max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
