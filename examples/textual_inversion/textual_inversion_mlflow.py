@@ -967,9 +967,6 @@ def main():
 
                 progress_bar.set_postfix(**logs)
                 accelerator.log(logs, step=global_step)
-                save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                accelerator.save_state(save_path)
-                logger.info(f"Saved state to {save_path}")
 
             if len(throughput_list) == 5:
                 avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
