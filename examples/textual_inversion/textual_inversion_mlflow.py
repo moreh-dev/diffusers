@@ -874,8 +874,7 @@ def main():
     num_params += get_num_parameters(vae)
     num_params += get_num_parameters(unet)
     mlflow.log_param('num_params', num_params)
-    start_time = time.time()
-    throughput_list = []
+    interval_log = {}
     for epoch in range(first_epoch, args.num_train_epochs):
         interval_start_time = time.time()
         text_encoder.train()
@@ -959,35 +958,40 @@ def main():
                 interval_elapsed_time = time.time() - interval_start_time
                 interval_start_time = time.time()
                 interval_throughput = (args.logging_steps*args.train_batch_size) / interval_elapsed_time                  
-                throughput_list.append(interval_throughput)
                 interval_lr = lr_scheduler.get_last_lr()[0] 
-                mlflow.log_metric('loss', loss.detach().item(), step=global_step)
-                mlflow.log_metric('throughput', interval_throughput, step=global_step)
-                mlflow.log_metric('lr', interval_lr, step=global_step)
+                if global_step not in interval_log:
+                    interval_log[global_step] = {"loss": loss.detach().item(), 
+                                                 "interval_throughput": interval_throughput, 
+                                                 "interval_lr": interval_lr, 
+                                                 "count": 1}
+                elif global_step in interval_log:
+                    interval_log[global_step]["loss"] += loss.detach().item()
+                    interval_log[global_step]["interval_throughput"] += interval_throughput
+                    interval_log[global_step]["interval_lr"] += interval_lr
+                    interval_log[global_step]["count"] += 1
+                # mlflow.log_metric('loss', loss.detach().item(), step=global_step)
+                # mlflow.log_metric('throughput', interval_throughput, step=global_step)
+                # mlflow.log_metric('lr', interval_lr, step=global_step)
 
                 progress_bar.set_postfix(**logs)
                 accelerator.log(logs, step=global_step)
 
-            if len(throughput_list) == 5:
-                avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
-                epoch_time = len(train_dataset) / avg_throughput
-                mlflow.log_metric('avg_throughput', avg_throughput)
-                mlflow.log_metric('epoch_time', epoch_time)
-
             if global_step >= args.max_train_steps:
-                if len(throughput_list) < 5:
-                    avg_throughput = sum(throughput_list) / len(throughput_list)
-                elif len(throughput_list) > 5:
-                    avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
-                epoch_time = len(train_dataset) / avg_throughput
+                total_throughput = 0
+                for key, value in interval_log.items():
+                    mlflow.log_metric('loss', value["loss"]/value["count"], step=key)
+                    mlflow.log_metric('throughput', value["interval_throughput"]/value["count"], step=key)
+                    mlflow.log_metric('lr', value["interval_lr"]/value["count"], step=key)
+                    total_throughput += value["interval_throughput"]/value["count"]
+                avg_throughput = total_throughput/len(interval_log)
                 mlflow.log_metric('avg_throughput', avg_throughput)
+                epoch_time = len(train_dataset) / avg_throughput
                 mlflow.log_metric('epoch_time', epoch_time)
-                # elapsed_time = (time.time() - start_time) 
-                # one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
-                # throughput = (args.max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
 
-                # mlflow.log_metric('avg_throughput', throughput)
-                # mlflow.log_metric('one_epoch_time', one_epoch_time)
+                if accelerator.is_main_process:
+                    save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                    accelerator.save_state(save_path)
+                    logger.info(f"Saved state to {save_path}")
                 break
     mlflow.end_run()
 
