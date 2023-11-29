@@ -261,11 +261,17 @@ def parse_args():
     parser.add_argument(
         "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
     )
+    parser.add_argument(
+        "--eval_batch_size", type=int, default=10, help="Batch size (per device) for the evaluation."
+    )
+    parser.add_argument(
+        "--num_test_sample", type=int, default=100, help="Number samples for the evaluation."
+    )
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
         "--max_train_steps",
         type=int,
-        default=5000,
+        default=None,
         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
     )
     parser.add_argument(
@@ -989,7 +995,7 @@ def main():
                 # mlflow.log_metric('avg_throughput', throughput)
                 # mlflow.log_metric('one_epoch_time', one_epoch_time)
                 break
-    mlflow.end_run()
+    # mlflow.end_run()
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
@@ -1027,6 +1033,43 @@ def main():
             )
     
     accelerator.end_training()
+    #calculate CLIP score
+    pipeline = StableDiffusionPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                text_encoder=accelerator.unwrap_model(text_encoder),
+                vae=vae,
+                unet=unet,
+                tokenizer=tokenizer,
+            ).to("cuda")
+    from prompt import list_of_prompts
+    if args.num_test_sample <= len(list_of_prompts):
+        list_of_prompts = list_of_prompts[:args.num_test_sample]
+    image_array = None
+    for start in range(0, len(list_of_prompts), args.eval_batch_size):
+        if start+10 < len(list_of_prompts):
+            prompts = list_of_prompts[start:start + args.eval_batch_size]
+        else:
+            prompts = list_of_prompts[start:]
+        images= pipeline(prompts, num_images_per_prompt=1, output_type="np").images
+        if image_array is None:
+            image_array = images
+        else:
+            image_array = np.concatenate([image_array, images], axis=0)
+
+    from torchmetrics.functional.multimodal import clip_score
+    from functools import partial
+
+    clip_score_fn = partial(clip_score, model_name_or_path="openai/clip-vit-base-patch16")
+
+    def calculate_clip_score(images, prompts):
+        images_int = (images * 255).astype("uint8")
+        clip_score = clip_score_fn(torch.from_numpy(images_int).permute(0, 3, 1, 2), prompts).detach()
+        return round(float(clip_score), 4)
+
+    sd_clip_score = calculate_clip_score(images, prompts)
+    print(f"CLIP score: {sd_clip_score}")
+    mlflow.log_metric('clip_score', sd_clip_score)
+    mlflow.end_run()
 
 
 if __name__ == "__main__":
