@@ -437,12 +437,6 @@ def parse_args():
         default=10,
         help="Log every X updates steps. Default to 10.",
     )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Set seed for reproducibility. If `None`, don't set the seed.",
-    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
