@@ -901,7 +901,7 @@ def main():
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
-                torch.manual_seed(42)
+                torch.manual_seed(args.seed)
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device="cpu")
                 timesteps = timesteps.to(latents.device).long()
 
