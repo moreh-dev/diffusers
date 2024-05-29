@@ -22,7 +22,6 @@ import random
 import warnings
 from pathlib import Path
 import mlflow
-import datetime
 
 import numpy as np
 import PIL
@@ -34,6 +33,7 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import create_repo, upload_folder
+from datasets import load_dataset
 
 # TODO: remove and import from diffusers.utils when the new version of diffusers is released
 from packaging import version
@@ -219,7 +219,7 @@ def parse_args():
         help="Pretrained tokenizer name or path if not the same as model_name",
     )
     parser.add_argument(
-        "--train_data_dir", type=str, default=None, required=True, help="A folder containing the training data."
+        "--dataset_name", type=str, default=None, required=True, help="The dataset name on Huggingface hub"
     )
     parser.add_argument(
         "--placeholder_token",
@@ -443,8 +443,8 @@ def parse_args():
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
 
-    if args.train_data_dir is None:
-        raise ValueError("You must specify a train data directory.")
+    if args.dataset_name != "diffusers/cat_toy_example":
+        raise ValueError("Currently only take diffusers/cat_toy_example as dataset_name")
 
     return args
 
@@ -505,7 +505,7 @@ imagenet_style_templates_small = [
 class TextualInversionDataset(Dataset):
     def __init__(
         self,
-        data_root,
+        dataset_name,
         tokenizer,
         learnable_property="object",  # [object, style]
         size=512,
@@ -516,7 +516,6 @@ class TextualInversionDataset(Dataset):
         placeholder_token="*",
         center_crop=False,
     ):
-        self.data_root = data_root
         self.tokenizer = tokenizer
         self.learnable_property = learnable_property
         self.size = size
@@ -524,9 +523,8 @@ class TextualInversionDataset(Dataset):
         self.center_crop = center_crop
         self.flip_p = flip_p
 
-        self.image_paths = [os.path.join(self.data_root, file_path) for file_path in os.listdir(self.data_root)]
-
-        self.num_images = len(self.image_paths)
+        self.images = load_dataset(dataset_name, split='train')['image']
+        self.num_images = len(self.images)
         self._length = self.num_images
 
         if set == "train":
@@ -547,7 +545,7 @@ class TextualInversionDataset(Dataset):
 
     def __getitem__(self, i):
         example = {}
-        image = Image.open(self.image_paths[i % self.num_images])
+        image = self.images[i % self.num_images]
 
         if not image.mode == "RGB":
             image = image.convert("RGB")
@@ -754,7 +752,7 @@ def main():
 
     # Dataset and DataLoaders creation:
     train_dataset = TextualInversionDataset(
-        data_root=args.train_data_dir,
+        dataset_name=args.dataset_name,
         tokenizer=tokenizer,
         size=args.resolution,
         placeholder_token=args.placeholder_token,
