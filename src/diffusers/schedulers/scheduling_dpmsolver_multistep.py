@@ -269,13 +269,17 @@ class DPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         abs_sample = sample.abs()  # "a certain percentile absolute pixel value"
 
         s = torch.quantile(abs_sample, self.config.dynamic_thresholding_ratio, dim=1)
-        s = torch.clamp(
-            s, min=1, max=self.config.sample_max_value
-        )  # When clamped to min=1, equivalent to standard clipping to [-1, 1]
+        #s = torch.clamp(
+        #    s, min=1, max=self.config.sample_max_value
+        #)  # When clamped to min=1, equivalent to standard clipping to [-1, 1]
+        s = s.minimum(torch.tensor([self.config.sample_max_value]).cuda())
+        s = s.maximum(torch.tensor([1.0]).cuda())
 
         s = s.unsqueeze(1)  # (batch_size, 1) because clamp will broadcast along dim=0
-        sample = torch.clamp(sample, -s, s) / s  # "we threshold xt0 to the range [-s, s] and then divide by s"
-
+        #sample = torch.clamp(sample, -s, s) / s  # "we threshold xt0 to the range [-s, s] and then divide by s"
+        sample = sample.minimum(s)
+        sample = sample.maximum(-s) / s
+        
         sample = sample.reshape(batch_size, channels, height, width)
         sample = sample.to(dtype)
 
