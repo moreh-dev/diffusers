@@ -17,34 +17,26 @@ import argparse
 import logging
 import math
 import os
-import time
 import random
+import time
 import warnings
+from functools import partial
 from pathlib import Path
-import mlflow
 
 import numpy as np
-import PIL
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
+from torch.utils.data import Dataset
+
+import diffusers
+import mlflow
+import PIL
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from huggingface_hub import create_repo, upload_folder
 from datasets import load_dataset
-
-# TODO: remove and import from diffusers.utils when the new version of diffusers is released
-from packaging import version
-from PIL import Image
-from torch.utils.data import Dataset
-from torchvision import transforms
-from tqdm.auto import tqdm
-from transformers import CLIPTextModel, CLIPTokenizer
-torch.multiprocessing.set_sharing_strategy('file_system')
-
-import diffusers
 from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
@@ -56,7 +48,16 @@ from diffusers import (
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
+from huggingface_hub import create_repo, upload_folder
+from packaging import version
+from PIL import Image
+from torchmetrics.functional.multimodal import clip_score
+from torchvision import transforms
+from tqdm.auto import tqdm
+from transformers import CLIPTextModel, CLIPTokenizer
 
+
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 if is_wandb_available():
     import wandb
@@ -87,12 +88,13 @@ logger = get_logger(__name__)
 
 
 def get_num_parameters(model):
-  num_params = 0
-  for param in model.parameters():
-    num_params += param.numel()
-  # in million
-  num_params /= 10**6
-  return num_params
+    num_params = 0
+    for param in model.parameters():
+        num_params += param.numel()
+    # in million
+    num_params /= 10**6
+    return num_params
+
 
 def save_model_card(repo_id: str, images=None, base_model=str, repo_folder=None):
     img_str = ""
@@ -143,7 +145,7 @@ def log_validation(text_encoder, tokenizer, unet, vae, args, accelerator, weight
     pipeline.set_progress_bar_config(disable=True)
 
     # run inference
-    generator = None if args.seed is None else torch.Generator(device=accelerator.device).manual_seed(args.seed)
+    generator = None if args.seed is None else torch.Generator(device=accelerator.device)
     images = []
     for _ in range(args.num_validation_images):
         with torch.autocast("cuda"):
@@ -272,7 +274,7 @@ def parse_args():
         "--max_train_steps",
         type=int,
         default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
+        help="Total number of training steps to perform. If provided, overrides num_train_epochs.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -317,10 +319,10 @@ def parse_args():
             "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
     )
-    parser.add_argument("--optimizer_algorithm", type=str, default=None, help="The optimizer algorithm used in training process" )
+    parser.add_argument("--optimizer_algorithm", type=str, default=None, help="The optimizer algorithm used in training process")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--weight_decay", type=float, default=1e-2,required=True, help="Weight decay to use.")
+    parser.add_argument("--weight_decay", type=float, default=1e-2, required=True, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
@@ -479,6 +481,7 @@ imagenet_templates_small = [
     "a photo of a small {}",
 ]
 
+
 imagenet_style_templates_small = [
     "a painting in the style of {}",
     "a rendering in the style of {}",
@@ -526,7 +529,6 @@ class TextualInversionDataset(Dataset):
         self.images = load_dataset(dataset_name, split='train')['image']
         self.num_images = len(self.images)
         self._length = self.num_images
-
         if set == "train":
             self._length = self.num_images * repeats
 
@@ -536,7 +538,6 @@ class TextualInversionDataset(Dataset):
             "bicubic": PIL_INTERPOLATION["bicubic"],
             "lanczos": PIL_INTERPOLATION["lanczos"],
         }[interpolation]
-
         self.templates = imagenet_style_templates_small if learnable_property == "style" else imagenet_templates_small
         self.flip_transform = transforms.RandomHorizontalFlip(p=self.flip_p)
 
@@ -546,13 +547,11 @@ class TextualInversionDataset(Dataset):
     def __getitem__(self, i):
         example = {}
         image = self.images[i % self.num_images]
-
         if not image.mode == "RGB":
             image = image.convert("RGB")
 
         placeholder_string = self.placeholder_token
         text = random.choice(self.templates).format(placeholder_string)
-
         example["input_ids"] = self.tokenizer(
             text,
             padding="max_length",
@@ -563,25 +562,16 @@ class TextualInversionDataset(Dataset):
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)
-
         if self.center_crop:
             crop = min(img.shape[0], img.shape[1])
-            (
-                h,
-                w,
-            ) = (
-                img.shape[0],
-                img.shape[1],
-            )
+            h, w = img.shape[0], img.shape[1]
             img = img[(h - crop) // 2 : (h + crop) // 2, (w - crop) // 2 : (w + crop) // 2]
 
         image = Image.fromarray(img)
         image = image.resize((self.size, self.size), resample=self.interpolation)
-
         image = self.flip_transform(image)
         image = np.array(image).astype(np.uint8)
         image = (image / 127.5 - 1.0).astype(np.float32)
-
         example["pixel_values"] = torch.from_numpy(image).permute(2, 0, 1)
         return example
 
@@ -589,9 +579,7 @@ class TextualInversionDataset(Dataset):
 def main():
     args = parse_args()
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
-
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
-
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
@@ -619,12 +607,12 @@ def main():
         diffusers.utils.logging.set_verbosity_error()
 
     # If passed along, set the training seed now.
-    if args.seed is not None:
+    if args.seed:
         set_seed(args.seed)
 
     # Handle the repository creation
     if accelerator.is_main_process:
-        if args.output_dir is not None:
+        if args.output_dir:
             os.makedirs(args.output_dir, exist_ok=True)
 
         if args.push_to_hub:
@@ -650,16 +638,14 @@ def main():
 
     # Add the placeholder token in tokenizer
     placeholder_tokens = [args.placeholder_token]
-
     if args.num_vectors < 1:
         raise ValueError(f"--num_vectors has to be larger or equal to 1, but is {args.num_vectors}")
-
     # add dummy tokens for multi-vector
     additional_tokens = []
     for i in range(1, args.num_vectors):
         additional_tokens.append(f"{args.placeholder_token}_{i}")
-    placeholder_tokens += additional_tokens
 
+    placeholder_tokens += additional_tokens
     num_added_tokens = tokenizer.add_tokens(placeholder_tokens)
     if num_added_tokens != args.num_vectors:
         raise ValueError(
@@ -732,7 +718,7 @@ def main():
             weight_decay=args.weight_decay,
             eps=args.adam_epsilon,
         )
-    if args.optimizer_algorithm == "Adam":
+    elif args.optimizer_algorithm == "Adam":
         optimizer = torch.optim.Adam(
             text_encoder.get_input_embeddings().parameters(),  # only optimize the embeddings
             lr=args.learning_rate,
@@ -740,7 +726,7 @@ def main():
             weight_decay=args.weight_decay,
             eps=args.adam_epsilon,
         )
-    if args.optimizer_algorithm == "RMSprop":
+    elif args.optimizer_algorithm == "RMSprop":
         optimizer = torch.optim.RMSprop(
             text_encoder.get_input_embeddings().parameters(),  # only optimize the embeddings
             lr=args.learning_rate,
@@ -764,7 +750,7 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers
     )
-    if args.validation_epochs is not None:
+    if args.validation_epochs:
         warnings.warn(
             f"FutureWarning: You are doing logging with validation_epochs={args.validation_epochs}."
             " Deprecated validation_epochs in favor of `validation_steps`"
@@ -800,7 +786,6 @@ def main():
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
-
     # Move vae and unet to device and cast to weight_dtype
     unet.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
@@ -813,13 +798,12 @@ def main():
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
     # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
+    # The trackers initialized automatically on the main process.
     if accelerator.is_main_process:
         accelerator.init_trackers("textual_inversion", config=vars(args))
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
@@ -827,7 +811,7 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    
+
     global_step = 0
     first_epoch = 0
     # Potentially load in the weights and states from a previous save
@@ -850,7 +834,6 @@ def main():
             accelerator.print(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
-
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
@@ -862,23 +845,12 @@ def main():
     # keep original embeddings as reference
     orig_embeds_params = accelerator.unwrap_model(text_encoder).get_input_embeddings().weight.data.clone()
 
-    #Initialize mlflow
-    # mlflow.set_tracking_uri("http://127.0.0.1:5000")
-    # current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    # experiment_name = args.pretrained_model_name_or_path
-
-    # if not mlflow.get_experiment_by_name(experiment_name):        
-    #     experiment_id = mlflow.create_experiment(experiment_name)
-
-    # experiment = mlflow.get_experiment_by_name(experiment_name)
-    # mlflow_runner = mlflow.start_run(run_name=f'bs{args.train_batch_size}_{current_datetime}', experiment_id=experiment.experiment_id)
-
+    # Start Mlflow run
     mlflow.start_run()
     num_params = get_num_parameters(text_encoder)
     num_params += get_num_parameters(vae)
     num_params += get_num_parameters(unet)
     mlflow.log_param('num_params', num_params)
-    start_time = time.time()
     throughput_list = []
     for epoch in range(first_epoch, args.num_train_epochs):
         interval_start_time = time.time()
@@ -898,8 +870,8 @@ def main():
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
+
                 # Sample a random timestep for each image
-                torch.manual_seed(args.seed)
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device="cpu")
                 timesteps = timesteps.to(latents.device).long()
 
@@ -953,23 +925,21 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-                    if args.validation_prompt is not None and global_step % args.validation_steps == 0:
+                    if args.validation_prompt and global_step % args.validation_steps == 0:
                         images = log_validation(
                             text_encoder, tokenizer, unet, vae, args, accelerator, weight_dtype, epoch
                         )
 
-            if (step) % args.logging_steps == 0:
+            if step % args.logging_steps == 0:
                 logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-                
                 interval_elapsed_time = time.time() - interval_start_time
                 interval_start_time = time.time()
-                interval_throughput = (args.logging_steps*args.train_batch_size) / interval_elapsed_time                  
+                interval_throughput = (args.logging_steps * args.train_batch_size) / interval_elapsed_time
                 throughput_list.append(interval_throughput)
-                interval_lr = lr_scheduler.get_last_lr()[0] 
+                interval_lr = lr_scheduler.get_last_lr()[0]
                 mlflow.log_metric('loss', loss.detach().item(), step=global_step)
                 mlflow.log_metric('throughput', interval_throughput, step=global_step)
                 mlflow.log_metric('lr', interval_lr, step=global_step)
-
                 progress_bar.set_postfix(**logs)
                 accelerator.log(logs, step=global_step)
 
@@ -984,17 +954,11 @@ def main():
                     avg_throughput = sum(throughput_list) / len(throughput_list)
                 elif len(throughput_list) > 5:
                     avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
+
                 epoch_time = len(train_dataset) / avg_throughput
                 mlflow.log_metric('avg_throughput', avg_throughput)
                 mlflow.log_metric('epoch_time', epoch_time)
-                # elapsed_time = (time.time() - start_time) 
-                # one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
-                # throughput = (args.max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
-
-                # mlflow.log_metric('avg_throughput', throughput)
-                # mlflow.log_metric('one_epoch_time', one_epoch_time)
                 break
-    # mlflow.end_run()
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
@@ -1004,6 +968,7 @@ def main():
             save_full_model = True
         else:
             save_full_model = args.save_as_full_pipeline
+
         if save_full_model:
             pipeline = StableDiffusionPipeline.from_pretrained(
                 args.pretrained_model_name_or_path,
@@ -1030,33 +995,33 @@ def main():
                 commit_message="End of training",
                 ignore_patterns=["step_*", "epoch_*"],
             )
-    
+
     accelerator.end_training()
-    #calculate CLIP score
+    # calculate CLIP score
     pipeline = StableDiffusionPipeline.from_pretrained(
-                args.pretrained_model_name_or_path,
-                text_encoder=accelerator.unwrap_model(text_encoder),
-                vae=vae,
-                unet=unet,
-                tokenizer=tokenizer,
-            ).to("cuda")
+        args.pretrained_model_name_or_path,
+        text_encoder=accelerator.unwrap_model(text_encoder),
+        vae=vae,
+        unet=unet,
+        tokenizer=tokenizer,
+    ).to("cuda")
+
     from prompt import list_of_prompts
     if args.num_test_sample <= len(list_of_prompts):
         list_of_prompts = list_of_prompts[:args.num_test_sample]
+
     image_array = None
     for start in range(0, len(list_of_prompts), args.eval_batch_size):
-        if start+10 < len(list_of_prompts):
+        if start + 10 < len(list_of_prompts):
             prompts = list_of_prompts[start:start + args.eval_batch_size]
         else:
             prompts = list_of_prompts[start:]
-        images= pipeline(prompts, num_images_per_prompt=1, output_type="np").images
+
+        images = pipeline(prompts, num_images_per_prompt=1, output_type="np").images
         if image_array is None:
             image_array = images
         else:
             image_array = np.concatenate([image_array, images], axis=0)
-
-    from torchmetrics.functional.multimodal import clip_score
-    from functools import partial
 
     clip_score_fn = partial(clip_score, model_name_or_path="openai/clip-vit-base-patch16")
 
