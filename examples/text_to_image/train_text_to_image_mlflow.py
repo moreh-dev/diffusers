@@ -17,39 +17,41 @@ import argparse
 import logging
 import math
 import os
-import time
 import random
+import time
+from functools import partial
 from pathlib import Path
-import mlflow
-import datetime
 
-import accelerate
-import datasets
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
+
+import accelerate
+import datasets
+import diffusers
+import mlflow
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.state import AcceleratorState
 from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
-from huggingface_hub import create_repo, upload_folder
-from packaging import version
-from torchvision import transforms
-from tqdm.auto import tqdm
-from transformers import CLIPTextModel, CLIPTokenizer
-from transformers.utils import ContextManagers
-torch.multiprocessing.set_sharing_strategy('file_system')
-
-import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
+from huggingface_hub import create_repo, upload_folder
+from packaging import version
+from torchmetrics.functional.multimodal import clip_score
+from torchvision import transforms
+from tqdm.auto import tqdm
+from transformers import CLIPTextModel, CLIPTokenizer
+from transformers.utils import ContextManagers
 
+
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 if is_wandb_available():
     import wandb
@@ -61,21 +63,21 @@ check_min_version("0.17.0.dev0")
 logger = get_logger(__name__, log_level="INFO")
 
 DATASET_NAME_MAPPING = {
-    "lambdalabs/pokemon-blip-captions": ("image", "text"),
+    "pokemon-blip-captions": ("image", "text"),
 }
 
 
 def get_num_parameters(model):
-  num_params = 0
-  for param in model.parameters():
-    num_params += param.numel()
-  # in million
-  num_params /= 10**6
-  return num_params
+    num_params = 0
+    for param in model.parameters():
+        num_params += param.numel()
+    # in million
+    num_params /= 10**6
+    return num_params
+
 
 def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight_dtype, epoch):
     logger.info("Running validation... ")
-
     pipeline = StableDiffusionPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=accelerator.unwrap_model(vae),
@@ -92,10 +94,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
     if args.enable_xformers_memory_efficient_attention:
         pipeline.enable_xformers_memory_efficient_attention()
 
-    if args.seed is None:
-        generator = None
-    else:
-        generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
+    generator = torch.Generator(device=accelerator.device) if args.seed else None
 
     images = []
     for i in range(len(args.validation_prompts)):
@@ -250,7 +249,7 @@ def parse_args():
         "--max_train_steps",
         type=int,
         default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
+        help="Total number of training steps to perform. If provided, overrides num_train_epochs.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -324,10 +323,10 @@ def parse_args():
             "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
     )
-    parser.add_argument("--optimizer_algorithm", type=str, default=None, help="The optimizer algorithm used in training process" )
+    parser.add_argument("--optimizer_algorithm", type=str, default=None, help="The optimizer algorithm used in training process")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--weight_decay", type=float, default=1e-2,required=True, help="Weight decay to use.")
+    parser.add_argument("--weight_decay", type=float, default=1e-2, required=True, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
@@ -440,8 +439,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-
-    if args.non_ema_revision is not None:
+    if args.non_ema_revision:
         deprecate(
             "non_ema_revision!=None",
             "0.15.0",
@@ -450,10 +448,9 @@ def main():
                 " use `--variant=non_ema` instead."
             ),
         )
+
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
-
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
-
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
@@ -479,12 +476,12 @@ def main():
         diffusers.utils.logging.set_verbosity_error()
 
     # If passed along, set the training seed now.
-    if args.seed is not None:
+    if args.seed:
         set_seed(args.seed)
 
     # Handle the repository creation
     if accelerator.is_main_process:
-        if args.output_dir is not None:
+        if args.output_dir:
             os.makedirs(args.output_dir, exist_ok=True)
 
         if args.push_to_hub:
@@ -566,11 +563,13 @@ def main():
         sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
         while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
             sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
+
         alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
 
         sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
         while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
             sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
+
         sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
 
         # Compute SNR.
@@ -632,20 +631,20 @@ def main():
             raise ImportError(
                 "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
             )
+
         if args.optimizer_algorithm == "AdamW":
             optimizer_cls = bnb.optim.AdamW8bit
         elif args.optimizer_algorithm == "Adam":
             optimizer_cls = bnb.optim.Adam8bit
         elif args.optimizer_algorithm == "RMSprop":
             optimizer_cls = bnb.optim.RMSprop8bit
-    else: 
+    else:
         if args.optimizer_algorithm == "AdamW":
             optimizer_cls = torch.optim.AdamW
         elif args.optimizer_algorithm == "Adam":
             optimizer_cls = torch.optim.Adam
         elif args.optimizer_algorithm == "RMSprop":
             optimizer_cls = torch.optim.RMSprop
-
 
     # Optimizer creation
     if args.optimizer_algorithm == "RMSprop":
@@ -670,7 +669,7 @@ def main():
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
-    if args.dataset_name is not None:
+    if args.dataset_name:
         # Downloading and loading a dataset from the hub.
         dataset = load_dataset(
             args.dataset_name,
@@ -679,7 +678,7 @@ def main():
         )
     else:
         data_files = {}
-        if args.train_data_dir is not None:
+        if args.train_data_dir:
             data_files["train"] = os.path.join(args.train_data_dir, "**")
         dataset = load_dataset(
             "imagefolder",
@@ -695,16 +694,17 @@ def main():
 
     # 6. Get the column names for input/target.
     dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
-    if args.image_column is None:
-        image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
+    if args.image_column:
+        image_column = dataset_columns[0] if dataset_columns else column_names[0]
     else:
         image_column = args.image_column
         if image_column not in column_names:
             raise ValueError(
                 f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
             )
-    if args.caption_column is None:
-        caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
+
+    if args.caption_column:
+        caption_column = dataset_columns[1] if dataset_columns else column_names[1]
     else:
         caption_column = args.caption_column
         if caption_column not in column_names:
@@ -726,6 +726,7 @@ def main():
                 raise ValueError(
                     f"Caption column `{caption_column}` should contain either strings or lists of strings."
                 )
+
         inputs = tokenizer(
             captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
@@ -749,7 +750,7 @@ def main():
         return examples
 
     with accelerator.main_process_first():
-        if args.max_train_samples is not None:
+        if args.max_train_samples:
             dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
         train_dataset = dataset["train"].with_transform(preprocess_train)
@@ -819,7 +820,6 @@ def main():
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
@@ -827,10 +827,9 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    
+
     global_step = 0
     first_epoch = 0
-
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
@@ -851,7 +850,6 @@ def main():
             accelerator.print(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
-
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
@@ -860,24 +858,11 @@ def main():
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
 
-    #Initialize mlflow
-    # mlflow.set_tracking_uri("http://127.0.0.1:5000")
-    # current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    # experiment_name = args.pretrained_model_name_or_path
-
-    # if not mlflow.get_experiment_by_name(experiment_name):        
-    #     experiment_id = mlflow.create_experiment(experiment_name)
-
-    # experiment = mlflow.get_experiment_by_name(experiment_name)
-    # mlflow_runner = mlflow.start_run(run_name=f'bs{args.train_batch_size}_{current_datetime}', experiment_id=experiment.experiment_id)
-
     mlflow.start_run()
-
     num_params = get_num_parameters(text_encoder)
     num_params += get_num_parameters(vae)
     num_params += get_num_parameters(unet)
     mlflow.log_param('num_params', num_params)
-    start_time = time.time()
     throughput_list = []
     for epoch in range(first_epoch, args.num_train_epochs):
         interval_start_time = time.time()
@@ -902,8 +887,10 @@ def main():
                     noise += args.noise_offset * torch.randn(
                         (latents.shape[0], latents.shape[1], 1, 1), device=latents.device
                     )
+
                 if args.input_pertubation:
                     new_noise = noise + args.input_pertubation * torch.randn_like(noise)
+
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
@@ -955,6 +942,7 @@ def main():
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -963,11 +951,11 @@ def main():
             if accelerator.sync_gradients:
                 if args.use_ema:
                     ema_unet.step(unet.parameters())
+
                 progress_bar.update(1)
                 global_step += 1
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
-
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
@@ -978,13 +966,12 @@ def main():
                 logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 interval_elapsed_time = time.time() - interval_start_time
                 interval_start_time = time.time()
-                interval_throughput = (args.logging_steps*args.train_batch_size) / interval_elapsed_time                  
+                interval_throughput = (args.logging_steps * args.train_batch_size) / interval_elapsed_time
                 throughput_list.append(interval_throughput)
                 interval_lr = lr_scheduler.get_last_lr()[0]
                 mlflow.log_metric('loss', loss.detach().item(), step=global_step)
                 mlflow.log_metric('throughput', interval_throughput, step=global_step)
                 mlflow.log_metric('lr', interval_lr, step=global_step)
-
                 progress_bar.set_postfix(**logs)
 
             if len(throughput_list) == 5:
@@ -1001,16 +988,10 @@ def main():
                 epoch_time = len(train_dataset) / avg_throughput
                 mlflow.log_metric('avg_throughput', avg_throughput)
                 mlflow.log_metric('epoch_time', epoch_time)
-                # elapsed_time = (time.time() - start_time) 
-                # one_epoch_time = elapsed_time/ (args.max_train_steps / num_update_steps_per_epoch)
-                # throughput = (args.max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
-
-                # mlflow.log_metric('avg_throughput', throughput)
-                # mlflow.log_metric('one_epoch_time', one_epoch_time)
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompts is not None and epoch % args.validation_epochs == 0:
+            if args.validation_prompts and epoch % args.validation_epochs == 0:
                 if args.use_ema:
                     # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
                     ema_unet.store(unet.parameters())
@@ -1028,7 +1009,6 @@ def main():
                 if args.use_ema:
                     # Switch back to the original UNet parameters.
                     ema_unet.restore(unet.parameters())
-    
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
@@ -1056,24 +1036,23 @@ def main():
 
     accelerator.end_training()
 
-    #calculate CLIP score
+    # calculate CLIP score
     from prompt import list_of_prompts
     if args.num_test_sample <= len(list_of_prompts):
         list_of_prompts = list_of_prompts[:args.num_test_sample]
-        
+
     image_array = None
     for start in range(0, len(list_of_prompts), args.eval_batch_size):
-        if start+10 < len(list_of_prompts):
+        if start + 10 < len(list_of_prompts):
             prompts = list_of_prompts[start:start + args.eval_batch_size]
         else:
             prompts = list_of_prompts[start:]
-        images= pipeline(prompts, num_images_per_prompt=1, output_type="np").images
+
+        images = pipeline(prompts, num_images_per_prompt=1, output_type="np").images
         if image_array is None:
             image_array = images
         else:
             image_array = np.concatenate([image_array, images], axis=0)
-    from torchmetrics.functional.multimodal import clip_score
-    from functools import partial
 
     clip_score_fn = partial(clip_score, model_name_or_path="openai/clip-vit-base-patch16")
 
@@ -1086,5 +1065,7 @@ def main():
     print(f"CLIP score: {sd_clip_score}")
     mlflow.log_metric('clip_score', sd_clip_score)
     mlflow.end_run()
+
+
 if __name__ == "__main__":
     main()
