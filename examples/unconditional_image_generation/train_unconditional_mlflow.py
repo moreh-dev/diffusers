@@ -6,29 +6,28 @@ import os
 import time
 from pathlib import Path
 from typing import Optional
-import mlflow
-import datetime
+
+import torch
+import torch.nn.functional as F
 
 import accelerate
 import datasets
-import torch
-import torch.nn.functional as F
+import diffusers
+import mlflow
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration
+from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
+from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
+from diffusers.optimization import get_scheduler
+from diffusers.training_utils import EMAModel
+from diffusers.utils import check_min_version, is_tensorboard_available, is_wandb_available
+from diffusers.utils.import_utils import is_xformers_available
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
 from torchvision import transforms
 from tqdm.auto import tqdm
-import PIL
 
-import diffusers
-from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
-from diffusers.optimization import get_scheduler
-from diffusers.training_utils import EMAModel
-from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
-from diffusers.utils.import_utils import is_xformers_available
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -39,12 +38,13 @@ logger = get_logger(__name__, log_level="INFO")
 
 
 def get_num_parameters(model):
-  num_params = 0
-  for param in model.parameters():
-    num_params += param.numel()
-  # in million
-  num_params /= 10**6
-  return num_params
+    num_params = 0
+    for param in model.parameters():
+        num_params += param.numel()
+    # in million
+    num_params /= 10**6
+    return num_params
+
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     """
@@ -58,14 +58,17 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
     """
     if not isinstance(arr, torch.Tensor):
         arr = torch.from_numpy(arr)
+
     res = arr[timesteps].float().to(timesteps.device)
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
+
     return res.expand(broadcast_shape)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
+    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -185,11 +188,11 @@ def parse_args():
     parser.add_argument(
         "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
     )
-    parser.add_argument("--optimizer_algorithm", type=str, default=None, help="The optimizer algorithm used in training process" )
+    parser.add_argument("--optimizer_algorithm", type=str, default=None, help="The optimizer algorithm used in training process")
     parser.add_argument("--adam_beta1", type=float, default=0.95, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument(
-        "--weight_decay", type=float, default=1e-6,required=True, help="Weight decay magnitude for the Adam optimizer."
+        "--weight_decay", type=float, default=1e-6, required=True, help="Weight decay magnitude for the Adam optimizer."
     )
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer.")
     parser.add_argument(
@@ -304,6 +307,7 @@ def parse_args():
 def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
     if token is None:
         token = HfFolder.get_token()
+
     if organization is None:
         username = whoami(token)["name"]
         return f"{username}/{model_id}"
@@ -313,9 +317,7 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 def main(args):
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
-
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
-
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
@@ -331,6 +333,7 @@ def main(args):
     elif args.logger == "wandb":
         if not is_wandb_available():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
+
         import wandb
 
     # `accelerate` 0.16.0 will have better support for customized saving
@@ -381,6 +384,10 @@ def main(args):
         datasets.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
 
+    # If passed along, set the training seed now.
+    if args.seed:
+        set_seed(args.seed)
+
     # Handle the repository creation
     if accelerator.is_main_process:
         if args.push_to_hub:
@@ -388,15 +395,15 @@ def main(args):
                 repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
             else:
                 repo_name = args.hub_model_id
+
             create_repo(repo_name, exist_ok=True, token=args.hub_token)
             repo = Repository(args.output_dir, clone_from=repo_name, token=args.hub_token)
-
             with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
                 if "step_*" not in gitignore:
                     gitignore.write("step_*\n")
                 if "epoch_*" not in gitignore:
                     gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
+        elif args.output_dir:
             os.makedirs(args.output_dir, exist_ok=True)
 
     # Initialize the model
@@ -480,7 +487,7 @@ def main(args):
             betas=(args.adam_beta1, args.adam_beta2),
             weight_decay=args.weight_decay,
             eps=args.adam_epsilon,
-        ) 
+        )
     if args.optimizer_algorithm == "RMSprop":
         optimizer = torch.optim.RMSprop(
             model.parameters(),
@@ -496,7 +503,7 @@ def main(args):
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
-    if args.dataset_name is not None:
+    if args.dataset_name:
         dataset = load_dataset(
             args.dataset_name,
             args.dataset_config_name,
@@ -524,7 +531,6 @@ def main(args):
         return {"input": images}
 
     logger.info(f"Dataset size: {len(dataset)}")
-
     dataset.set_transform(transform_images)
     train_dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers
@@ -555,7 +561,6 @@ def main(args):
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     max_train_steps = args.num_epochs * num_update_steps_per_epoch
-
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(dataset)}")
     logger.info(f"  Num Epochs = {args.num_epochs}")
@@ -566,7 +571,6 @@ def main(args):
 
     global_step = 0
     first_epoch = 0
-
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
@@ -587,29 +591,13 @@ def main(args):
             accelerator.print(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
-
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
-    # Train!
-    #Initialize mlflow
-    # mlflow.set_tracking_uri("http://127.0.0.1:5000")
-    # current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    # experiment_name = args.model_config_name_or_path
-
-    # if not mlflow.get_experiment_by_name(experiment_name):        
-    #     experiment_id = mlflow.create_experiment(experiment_name)
-
-    # experiment = mlflow.get_experiment_by_name(experiment_name)
-    # mlflow_runner = mlflow.start_run(run_name=f'bs{args.train_batch_size}_{current_datetime}', experiment_id=experiment.experiment_id)
-
     mlflow.start_run()
-
     num_params = get_num_parameters(model)
     mlflow.log_param('num_params', num_params)
-
-    start_time = time.time()
     throughput_list = []
     for epoch in range(first_epoch, args.num_epochs):
         interval_start_time = time.time()
@@ -621,6 +609,7 @@ def main(args):
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
+
                 continue
 
             clean_images = batch["input"]
@@ -658,6 +647,7 @@ def main(args):
 
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), 1.0)
+
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -666,6 +656,7 @@ def main(args):
             if accelerator.sync_gradients:
                 if args.use_ema:
                     ema_model.step(model.parameters())
+
                 progress_bar.update(1)
                 global_step += 1
 
@@ -677,89 +668,43 @@ def main(args):
 
             if (step) % args.logging_steps == 0:
                 logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
-                
                 interval_elapsed_time = time.time() - interval_start_time
                 interval_start_time = time.time()
-                interval_throughput = (args.logging_steps*args.train_batch_size) / interval_elapsed_time                  
+                interval_throughput = (args.logging_steps * args.train_batch_size) / interval_elapsed_time
                 throughput_list.append(interval_throughput)
-                interval_lr = lr_scheduler.get_last_lr()[0] 
+                interval_lr = lr_scheduler.get_last_lr()[0]
                 mlflow.log_metric('loss', loss.detach().item(), step=global_step)
                 mlflow.log_metric('throughput', interval_throughput, step=global_step)
                 mlflow.log_metric('lr', interval_lr, step=global_step)
 
                 if args.use_ema:
                     logs["ema_decay"] = ema_model.cur_decay_value
+
                 progress_bar.set_postfix(**logs)
                 accelerator.log(logs, step=global_step)
-            
+
             if len(throughput_list) == 5:
                 avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
                 epoch_time = len(dataset) / avg_throughput
                 mlflow.log_metric('avg_throughput', avg_throughput)
-                mlflow.log_metric('epoch_time', epoch_time)   
+                mlflow.log_metric('epoch_time', epoch_time)
 
             if global_step >= max_train_steps:
                 if len(throughput_list) < 5:
                     avg_throughput = sum(throughput_list) / len(throughput_list)
                 elif len(throughput_list) > 5:
                     avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
+
                 epoch_time = len(dataset) / avg_throughput
                 mlflow.log_metric('avg_throughput', avg_throughput)
                 mlflow.log_metric('epoch_time', epoch_time)
-                # elapsed_time = time.time() - start_time
-                # one_epoch_time = elapsed_time/ args.num_epochs
-                # throughput = (max_train_steps * args.train_batch_size * args.gradient_accumulation_steps) / elapsed_time
-
-                # mlflow.log_metric('avg_throughput', throughput)
-                # mlflow.log_metric('one_epoch_time', one_epoch_time)
                 break
 
         progress_bar.close()
-        
         accelerator.wait_for_everyone()
 
         # Generate sample images for visual inspection
         if accelerator.is_main_process:
-            # if epoch % args.save_images_epochs == 0 or epoch == args.num_epochs - 1:
-            #     unet = accelerator.unwrap_model(model)
-
-            #     if args.use_ema:
-            #         ema_model.store(unet.parameters())
-            #         ema_model.copy_to(unet.parameters())
-
-            #     pipeline = DDPMPipeline(
-            #         unet=unet,
-            #         scheduler=noise_scheduler,
-            #     )
-
-            #     generator = torch.Generator(device=pipeline.device).manual_seed(0)
-            #     # run pipeline in inference (sample random noise and denoise)
-            #     images = pipeline(
-            #         generator=generator,
-            #         batch_size=args.eval_batch_size,
-            #         num_inference_steps=args.ddpm_num_inference_steps,
-            #         output_type="numpy",
-            #     ).images
-
-            #     if args.use_ema:
-            #         ema_model.restore(unet.parameters())
-
-            #     # denormalize the images and save to tensorboard
-            #     images_processed = (images * 255).round().astype("uint8")
-
-            #     if args.logger == "tensorboard":
-            #         if is_accelerate_version(">=", "0.17.0.dev0"):
-            #             tracker = accelerator.get_tracker("tensorboard", unwrap=True)
-            #         else:
-            #             tracker = accelerator.get_tracker("tensorboard")
-            #         tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
-            #     elif args.logger == "wandb":
-            #         # Upcoming `log_images` helper coming in https://github.com/huggingface/accelerate/pull/962/files
-            #         accelerator.get_tracker("wandb").log(
-            #             {"test_samples": [wandb.Image(img) for img in images_processed], "epoch": epoch},
-            #             step=global_step,
-            #         )
-
             if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
                 # save the model
                 unet = accelerator.unwrap_model(model)
@@ -772,7 +717,6 @@ def main(args):
                     unet=unet,
                     scheduler=noise_scheduler,
                 )
-
                 pipeline.save_pretrained(args.output_dir)
 
                 if args.use_ema:
@@ -780,8 +724,8 @@ def main(args):
 
                 if args.push_to_hub:
                     repo.push_to_hub(commit_message=f"Epoch {epoch}", blocking=False)
-    mlflow.end_run()
 
+    mlflow.end_run()
     accelerator.end_training()
 
 
