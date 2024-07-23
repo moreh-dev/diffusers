@@ -37,7 +37,7 @@ from accelerate.logging import get_logger
 from accelerate.state import AcceleratorState
 from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
-from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDPMScheduler, DPMSolverMultistepScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available
@@ -80,14 +80,15 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
     logger.info("Running validation... ")
     pipeline = StableDiffusionPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
-        vae=accelerator.unwrap_model(vae),
-        text_encoder=accelerator.unwrap_model(text_encoder),
+        vae=vae,
+        text_encoder=text_encoder,
         tokenizer=tokenizer,
         unet=accelerator.unwrap_model(unet),
         safety_checker=None,
         revision=args.revision,
         torch_dtype=weight_dtype,
     )
+    pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
@@ -877,7 +878,7 @@ def main():
 
             with accelerator.accumulate(unet):
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
+                latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample().detach()
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -904,7 +905,7 @@ def main():
                     noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                encoder_hidden_states = text_encoder(batch["input_ids"])[0].to(dtype=weight_dtype)
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -962,7 +963,7 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            if (step) % args.logging_steps == 0:
+            if step % args.logging_steps == 0:
                 logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 interval_elapsed_time = time.time() - interval_start_time
                 interval_start_time = time.time()
@@ -985,6 +986,7 @@ def main():
                     avg_throughput = sum(throughput_list) / len(throughput_list)
                 elif len(throughput_list) > 5:
                     avg_throughput = sum(throughput_list[1:-1]) / (len(throughput_list) - 2)
+
                 epoch_time = len(train_dataset) / avg_throughput
                 mlflow.log_metric('avg_throughput', avg_throughput)
                 mlflow.log_metric('epoch_time', epoch_time)

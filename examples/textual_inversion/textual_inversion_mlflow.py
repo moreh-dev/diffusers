@@ -150,13 +150,14 @@ def log_validation(text_encoder, tokenizer, unet, vae, args, accelerator, weight
     for _ in range(args.num_validation_images):
         with torch.autocast("cuda"):
             image = pipeline(args.validation_prompt, num_inference_steps=25, generator=generator).images[0]
+
         images.append(image)
 
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             np_images = np.stack([np.asarray(img) for img in images])
             tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
-        if tracker.name == "wandb":
+        elif tracker.name == "wandb":
             tracker.log(
                 {
                     "validation": [
