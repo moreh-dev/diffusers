@@ -608,7 +608,7 @@ def main():
         diffusers.utils.logging.set_verbosity_error()
 
     # If passed along, set the training seed now.
-    if args.seed:
+    if args.seed is not None:
         set_seed(args.seed)
 
     # Handle the repository creation

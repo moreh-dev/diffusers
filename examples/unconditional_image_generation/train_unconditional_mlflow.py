@@ -385,7 +385,7 @@ def main(args):
         diffusers.utils.logging.set_verbosity_error()
 
     # If passed along, set the training seed now.
-    if args.seed:
+    if args.seed is not None:
         set_seed(args.seed)
 
     # Handle the repository creation
@@ -705,6 +705,45 @@ def main(args):
 
         # Generate sample images for visual inspection
         if accelerator.is_main_process:
+            # if epoch % args.save_images_epochs == 0 or epoch == args.num_epochs - 1:
+            #     unet = accelerator.unwrap_model(model)
+
+            #     if args.use_ema:
+            #         ema_model.store(unet.parameters())
+            #         ema_model.copy_to(unet.parameters())
+
+            #     pipeline = DDPMPipeline(
+            #         unet=unet,
+            #         scheduler=noise_scheduler,
+            #     )
+
+            #     generator = torch.Generator(device=pipeline.device).manual_seed(0)
+            #     # run pipeline in inference (sample random noise and denoise)
+            #     images = pipeline(
+            #         generator=generator,
+            #         batch_size=args.eval_batch_size,
+            #         num_inference_steps=args.ddpm_num_inference_steps,
+            #         output_type="numpy",
+            #     ).images
+
+            #     if args.use_ema:
+            #         ema_model.restore(unet.parameters())
+
+            #     # denormalize the images and save to tensorboard
+            #     images_processed = (images * 255).round().astype("uint8")
+
+            #     if args.logger == "tensorboard":
+            #         if is_accelerate_version(">=", "0.17.0.dev0"):
+            #             tracker = accelerator.get_tracker("tensorboard", unwrap=True)
+            #         else:
+            #             tracker = accelerator.get_tracker("tensorboard")
+            #         tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+            #     elif args.logger == "wandb":
+            #         # Upcoming `log_images` helper coming in https://github.com/huggingface/accelerate/pull/962/files
+            #         accelerator.get_tracker("wandb").log(
+            #             {"test_samples": [wandb.Image(img) for img in images_processed], "epoch": epoch},
+            #             step=global_step,
+            #         )
             if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
                 # save the model
                 unet = accelerator.unwrap_model(model)
