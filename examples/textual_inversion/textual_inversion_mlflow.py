@@ -165,6 +165,10 @@ def log_validation(text_encoder, tokenizer, unet, vae, args, accelerator, weight
                     ]
                 }
             )
+        elif tracker.name == "mlflow":
+            for i, image in enumerate(images):
+                client = mlflow.MlflowClient()
+                client.log_image(tracker.info.run_id, image, f"image_{i}_{args.validation_prompt}.png")
 
     del pipeline
     torch.cuda.empty_cache()
