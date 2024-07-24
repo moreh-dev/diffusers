@@ -6,6 +6,7 @@ Jinja2==3.1.2
 matplotlib==3.7.2
 opencv-python>=4.8.0
 datasets==2.14.6
+setuptools==65.5.0
 tensorboard==2.11.2
 torchmetrics
 pytest==7.4.2
