@@ -402,9 +402,9 @@ class AttentionPooling(nn.Module):
         super().__init__()
         self.dtype = dtype
         self.positional_embedding = nn.Parameter(torch.randn(1, embed_dim) / embed_dim**0.5)
-        self.k_proj = nn.Linear(embed_dim, embed_dim, dtype=self.dtype)
-        self.q_proj = nn.Linear(embed_dim, embed_dim, dtype=self.dtype)
-        self.v_proj = nn.Linear(embed_dim, embed_dim, dtype=self.dtype)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.num_heads = num_heads
         self.dim_per_head = embed_dim // self.num_heads
 
@@ -433,11 +433,13 @@ class AttentionPooling(nn.Module):
 
         # (bs*n_heads, class_token_length, length+class_token_length):
         scale = 1 / math.sqrt(math.sqrt(self.dim_per_head))
-        weight = torch.einsum("bct,bcs->bts", q * scale, k * scale)  # More stable with f16 than dividing afterwards
+        #weight = torch.einsum("bct,bcs->bts", q * scale, k * scale)  # More stable with f16 than dividing afterwards
+        weight = torch.matmul((q * scale).transpose(1,2), k * scale)  # More stable with f16 than dividing afterwards
         weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
 
         # (bs*n_heads, dim_per_head, class_token_length)
-        a = torch.einsum("bts,bcs->bct", weight, v)
+        #a = torch.einsum("bts,bcs->bct", weight, v)
+        a = torch.matmul(weight, v.transpose(1,2)).transpose(1,2)  # More stable with f16 than dividing afterwards
 
         # (bs, length+1, width)
         a = a.reshape(bs, -1, 1).transpose(1, 2)
